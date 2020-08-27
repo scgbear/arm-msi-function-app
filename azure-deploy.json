@@ -1,0 +1,158 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "groupId": {
+            "type": "string",
+            "metadata": {
+                "description": "The group name to use for creating resource names"
+            }
+        },
+        "environment": {
+            "type": "string",
+            "defaultValue": "d",
+            "metadata": {
+                "description": "The alphabetical character that identifies the deployment environment to use in the name for each created resource. For example, values include 'd' for development, 't' for test, 's' for staging, and 'p' for production."
+            }
+        },
+        "appInsightsRegion": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "The region to deploy the Application Insights resource"
+            }
+        }
+    },
+    "variables": {
+        "location": "[resourceGroup().location]",
+        "baseName": "[toLower(concat(parameters('groupId'), parameters('environment'), variables('location')))]",
+        "appServicePlanName": "[concat(variables('baseName'), 'asp')]",
+        "appInsightsRegion": "[if(equals(parameters('appInsightsRegion'), ''), variables('location'), parameters('appInsightsRegion'))]",
+        "functionAppName": "[concat(variables('baseName'), 'fa')]",
+        "storageAccountName": "[concat(variables('baseName'), 'sa2')]",
+        "appInsightsName": "[concat(variables('baseName'), 'ai')]",
+        "keyVaultName": "[concat(variables('baseName'), 'kvt')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('appServicePlanName')]",
+            "location": "[variables('location')]",
+            "sku": {
+                "name": "Y1",
+                "tier": "Dynamic",
+                "size": "Y1",
+                "family": "Y",
+                "capacity": 0
+            },
+            "properties": {
+                "perSiteScaling": false,
+                "maximumElasticWorkerCount": 1,
+                "isSpot": false,
+                "reserved": false,
+                "isXenon": false,
+                "hyperV": false,
+                "targetWorkerCount": 0,
+                "targetWorkerSizeId": 0
+            },
+            "kind": "functionapp"
+        },
+        {
+            "name": "[variables('storageAccountName')]",
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2019-04-01",
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "kind": "StorageV2",
+            "location": "[variables('location')]",
+            "properties": {
+                "accessTier": "Hot"
+            },
+            "resources": []
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "apiVersion": "2015-05-01",
+            "name": "[variables('appInsightsName')]",
+            "location": "[variables('appInsightsRegion')]",
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web"
+            }
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "name": "[variables('keyVaultName')]",
+            "apiVersion": "2019-09-01",
+            "location": "[variables('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+            ],
+            "properties": {
+                "tenantId": "[subscription().tenantId]",
+                "accessPolicies": [
+                    {
+                        "tenantId": "[reference(concat('Microsoft.Web/sites/',  variables('functionAppName'), '/providers/Microsoft.ManagedIdentity/Identities/default'), '2015-08-31-PREVIEW').tenantId]",
+                        "objectId": "[reference(concat('Microsoft.Web/sites/',  variables('functionAppName'), '/providers/Microsoft.ManagedIdentity/Identities/default'), '2015-08-31-PREVIEW').principalId]",
+                        "permissions": {
+                                "secrets": [ "get" ]
+                            }
+                    }
+                ],
+                "enableSoftDelete": true,
+                "enabledForTemplateDeployment": true,
+                "softDeleteRetentionInDays": 14,
+                "sku": {
+                    "name": "Standard",
+                    "family": "A"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults/secrets",
+            "name": "[concat(variables('keyVaultName'), '/StorageConnectionString')]",
+            "apiVersion": "2019-09-01",
+            "location": "[variables('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+            ],
+            "properties": {
+                "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', listKeys(concat(resourceGroup().id, '/providers/', 'Microsoft.Storage/storageAccounts/', variables('storageAccountName')),'2015-05-01-preview').key1)]"
+            }
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults/secrets",
+            "name": "[concat(variables('keyVaultName'), '/InstrumentationKey')]",
+            "apiVersion": "2019-09-01",
+            "location": "[variables('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+                "[resourceId('Microsoft.Insights/components/', variables('appInsightsName'))]"
+            ],
+            "properties": {
+                "value": "[reference(resourceId('Microsoft.Insights/components/', variables('appInsightsName')), '2015-05-01').InstrumentationKey]"
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('functionAppName')]",
+            "location": "[variables('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+            ],
+            "kind": "functionapp",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "httpsOnly": true
+            }
+        }
+    ]
+}
